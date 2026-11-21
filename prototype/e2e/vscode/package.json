@@ -1,0 +1,19 @@
+{
+  "name": "crumb-vscode-e2e",
+  "displayName": "crumb e2e (pruebas)",
+  "private": true,
+  "version": "0.0.0",
+  "publisher": "crumb-dev",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [],
+  "scripts": {
+    "test": "node runTest.js"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^2.4.1",
+    "mocha": "^11.8.0"
+  }
+}

@@ -1,0 +1,8 @@
+# Dependencias y copias descargadas para pruebas
+node_modules/
+.vscode-test/
+
+# Salidas de pruebas (contienen rutas y nombre del equipo)
+*.log
+*.svg
+prototype/e2e/vscode/vsc-out*.txt
