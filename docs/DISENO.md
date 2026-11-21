@@ -1,105 +1,173 @@
-﻿# Diseño técnico del MVP (borrador v0.1)
+﻿# Diseño técnico del MVP (v1.0)
+
+Producto: [PRODUCTO.md](PRODUCTO.md). Plan de trabajo: [TAREAS.md](TAREAS.md).
 
 ## 1. Idea central
-El shell ya guarda y recupera su historial. `crumb` solo decide **qué archivo de historial usa el shell** según la carpeta, y le pide al shell que lo cargue. No captura comandos ni reemplaza flechas ni Ctrl+R.
+El shell ya guarda y recupera su historial. `crumb` solo decide **qué archivo de historial usa el shell** según la carpeta, y el shell lo carga. No captura comandos ni reemplaza flechas ni Ctrl+R.
 
 ```
-Prompt del shell ──(cambió la carpeta?)──► crumb resolve ──► ruta del archivo de historial
-        ▲                                                            │
-        └──── el shell cambia su archivo y recarga el historial ◄────┘
+prompt ──(¿cambió la carpeta?)──► crumb resolve ──► modo + ruta del archivo
+   ▲                                                        │
+   └──── el script cambia el archivo y recarga el historial ◄┘
 ```
 
-## 2. Piezas
-1. **Binario `crumb` (Go)**: decide el modo, detecta proyecto, hace la pregunta inicial y guarda la elección.
-2. **Script de integración por shell** (`pwsh.ps1`, `bash.sh`), embebido en el binario con `go:embed`. Se instala con una línea en el perfil del shell:
-   - PowerShell: `crumb init pwsh | Out-String | Invoke-Expression`
-   - bash: `eval "$(crumb init bash)"`
+## 2. Piezas y responsabilidades
+| Pieza | Hace | No hace |
+|---|---|---|
+| **Binario `crumb` (Go)** | Detectar el proyecto, normalizar rutas, nombrar archivos, leer y guardar elecciones y configuración, comandos de mantenimiento (`move`, `setup`, `purge`). | Leer el teclado ni tocar la sesión del shell. |
+| **Script de integración** (`pwsh.ps1`, `bash.sh`, embebidos con `go:embed`) | Detectar el cambio de carpeta, llamar a `crumb resolve`, **hacer la pregunta inicial** (D1), cambiar y recargar el historial, omitir comandos sensibles, definir la función `crumb` de la sesión. | Lógica de proyecto o de archivos: todo eso lo decide el binario. |
+
+Se instala con una línea en el perfil, que también puede añadir `crumb setup`:
+- PowerShell: `Invoke-Expression (& crumb init pwsh | Out-String)`
+- bash: `eval "$(crumb init bash)"`
+
+**Función `crumb` de la sesión.** El binario no puede cambiar el estado del shell que lo llamó. Por eso el script define una función `crumb` que envuelve al binario: `crumb off`, `crumb on` y `crumb mode` se resuelven en la función (desactivar o recargar el historial) y el resto se pasa al binario.
 
 ## 3. Almacenamiento
-Todo vive fuera de los proyectos. No se ensucia ningún repo en el MVP.
+Todo vive fuera de los proyectos. Ningún repo se ensucia en el MVP.
 
-| Qué | Dónde (Windows / Linux-macOS) |
-|---|---|
-| Configuración | `%APPDATA%\crumb\config.toml` / `~/.config/crumb/config.toml` |
-| Elecciones por carpeta | `%APPDATA%\crumb\choices.json` / `~/.config/crumb/choices.json` |
-| Historiales | `%LOCALAPPDATA%\crumb\histories\` / `~/.local/share/crumb/histories/` |
+| Qué | Windows | Linux / macOS |
+|---|---|---|
+| Configuración (`config.toml`) | `%APPDATA%\crumb\` | `$XDG_CONFIG_HOME/crumb/` o `~/.config/crumb/` |
+| Elecciones (`choices.json`) | `%APPDATA%\crumb\` | igual que la configuración |
+| Historiales | `%LOCALAPPDATA%\crumb\histories\` | `$XDG_DATA_HOME/crumb/histories/` o `~/.local/share/crumb/histories/` |
 
-- Un archivo por clave: `<hash de la ruta>.<shell>.txt`. La clave es la ruta de la carpeta (modo carpeta) o de la raíz del proyecto (modo proyecto).
-- **Formato**: el nativo de cada shell (texto, una entrada por línea). El shell sigue escribiendo y leyendo su propio formato, así que no hay que capturar comandos. Se separan por shell porque PowerShell y bash guardan comandos de varias líneas de forma distinta.
-- **Modo global**: se deja el archivo original del shell sin tocar.
-- **Costo de esta decisión**: sin fecha, carpeta ni código de salida por comando. Para `marcar` y la búsqueda avanzada (segunda versión) habrá que migrar a un formato propio o añadir un índice aparte.
+`CRUMB_HOME=<dir>` manda todo a `<dir>/config` y `<dir>/histories` (pruebas y usuarios avanzados).
 
-`choices.json`:
+### Nombre del archivo de historial (D4)
+`<carpeta>-<hash8>.<shell>.txt`, por ejemplo `api-3f9a1c0b.pwsh.txt`.
+- `<carpeta>`: último segmento de la ruta, con los caracteres no seguros cambiados por `_`.
+- `<hash8>`: primeros 8 caracteres hex de SHA-256 de la ruta normalizada.
+- `<shell>`: `pwsh` (Windows PowerShell y PowerShell 7 comparten formato) o `bash`.
+
+### Normalización de rutas
+Absoluta, limpia (`filepath.Clean`) y con enlaces simbólicos resueltos. En Windows además: minúsculas y `\` como separador, porque `C:\Repo` y `c:\repo` son la misma carpeta. Es la clave de todo: elecciones y nombres de archivo usan la ruta normalizada.
+
+### Formato del historial
+El nativo de cada shell. El shell sigue leyendo y escribiendo su propio formato, así que no hay que capturar comandos. Por eso PowerShell y bash tienen historiales separados en el mismo proyecto (E3). En modo global se usa el archivo original del shell y no se toca.
+
+Costo de esta decisión: no hay fecha, carpeta ni código de salida por comando. `marcar` y la búsqueda avanzada (segunda versión) necesitarán un formato propio o un índice aparte.
+
+### `choices.json`
 ```json
-{ "C:\\Users\\yo\\repos\\app": "project", "C:\\Users\\yo\\Downloads": "global" }
+{
+  "version": 1,
+  "choices": {
+    "c:\\users\\yo\\repos\\app": "project",
+    "c:\\users\\yo\\repos\\tools": "folder"
+  }
+}
+```
+- Se escribe de forma atómica (archivo temporal y renombrado) y con bloqueo, porque dos terminales pueden escribir a la vez.
+- `version` permite migrar el formato más adelante.
+
+### `config.toml` (D3)
+Opcional. Sin archivo se usan estos valores:
+```toml
+# Archivos o carpetas que marcan la raíz de un proyecto
+markers = [".git", ".crumb", "package.json", "go.mod", "Cargo.toml", "pyproject.toml", "*.csproj", "*.sln"]
+
+# Comandos que nunca se guardan (glob sobre la línea completa).
+# Además, un comando que empieza con espacio nunca se guarda.
+ignore = []
+```
+El binario entrega la configuración al script en `crumb init` (así no se lee en cada prompt). Cambiarla requiere abrir una terminal nueva.
+
+### Archivo `.crumb` en un proyecto (D2)
+Opcional. Su presencia marca una raíz de proyecto. Con `scope = "root"`, todo el árbol de debajo es un solo proyecto aunque contenga otros marcadores (monorepo con un solo historial).
+```toml
+scope = "root"
 ```
 
 ## 4. Resolución del historial
-`crumb resolve --shell pwsh --cwd <ruta>` imprime en stdout la ruta del archivo a usar.
+`crumb resolve --shell pwsh|bash --cwd <ruta>` imprime una sola línea, separada por tabulador:
 
-1. Buscar raíz de proyecto: subir desde `cwd` hasta encontrar un marcador. Gana el más cercano, así una subcarpeta con su propio proyecto tiene historial propio. Se detiene en el directorio personal o en la raíz del disco.
-2. Clave candidata: la raíz de proyecto si existe, si no `cwd`.
-3. Buscar una elección guardada para esa clave, subiendo por los padres.
-4. Si no hay ninguna y no hay proyecto: usar el global sin preguntar ni guardar. Si hay proyecto: **preguntar** global, carpeta o proyecto, y guardar la respuesta.
-5. Devolver la ruta según el modo.
+| Salida | Significado |
+|---|---|
+| `global` | Usar el archivo global del shell. |
+| `folder<TAB><archivo>` | Historial propio de esta carpeta. |
+| `project<TAB><archivo>` | Historial del proyecto. |
+| `ask<TAB><raíz>` | Proyecto sin elección guardada: el script pregunta. |
 
-Marcadores por defecto, configurables: `.git`, `.crumb`, `package.json`, `go.mod`, `Cargo.toml`, `pyproject.toml`, `*.csproj`, `*.sln`.
+Código de salida distinto de 0 = error (ver D5).
 
-La pregunta se escribe en stderr y se lee del terminal (`CONIN$` en Windows, `/dev/tty` en Unix), así stdout queda libre para la ruta. Si no hay terminal interactivo (scripts, tareas automáticas), no pregunta y usa el global.
+Algoritmo:
+1. Normalizar `cwd`.
+2. **Raíz de proyecto**: subir desde `cwd` hasta el primer directorio con un marcador. Gana el más cercano. Si más arriba hay un `.crumb` con `scope = "root"`, gana ese. El directorio personal y la raíz del disco nunca son proyecto (evita que un repo de dotfiles en `~` convierta todo en un proyecto).
+3. **Clave**: la raíz si hay proyecto; si no, `cwd`.
+4. **Elección guardada** para la clave exacta (no se heredan elecciones de carpetas padre: un proyecto anidado pregunta por separado).
+5. Sin elección: fuera de proyecto → `global`. En proyecto → `ask`.
+6. Con elección: `project` usa la raíz; `folder` usa `cwd`; `global` no usa archivo.
+
+Tras la pregunta, el script guarda la respuesta con `crumb mode <modo> --path <raíz>` y vuelve a resolver. Esto pasa una sola vez por proyecto.
+
+Si no hay terminal interactiva (scripts, tareas automáticas), el script no pregunta y usa el global.
 
 ## 5. Integración con cada shell
-Regla: llamar a `crumb` **solo cuando cambia la carpeta**, no en cada comando, para no pagar el arranque del proceso cada vez.
+Regla: llamar a `crumb` **solo cuando cambia la carpeta**, no en cada comando, para no pagar el arranque del proceso.
 
 ### bash
-- Se engancha en `PROMPT_COMMAND`.
-- Al cambiar `$PWD` (y al abrir): `history -a` para guardar lo pendiente, `HISTFILE=<ruta>`, `history -c`, `history -r`.
-- Cada prompt: `history -a` para escribir al instante, de modo que varias terminales se vean entre sí (`history -n` para leer lo de otras sesiones).
-- Comandos que no se guardan: `HISTCONTROL=ignorespace` y `HISTIGNORE` con los patrones de la configuración.
+- Se engancha en `PROMPT_COMMAND`, sin romper otros ganchos (por ejemplo la integración de VS Code).
+- Al cambiar `$PWD` y al abrir: `history -a` (guarda lo pendiente en el archivo anterior), `HISTFILE=<archivo>`, `history -c`, `history -r`.
+- En cada prompt: `history -a` para que otras terminales vean el comando.
+- Sensibles: `HISTCONTROL=ignorespace` y `HISTIGNORE` con los patrones de `ignore`.
 
-### PowerShell
-- Se envuelve la función `prompt`.
-- Al cambiar `$PWD`: `Set-PSReadLineOption -HistorySavePath <ruta>`, `[PSConsoleReadLine]::ClearHistory()` y cargar el archivo con `[PSConsoleReadLine]::AddToHistory(...)` por línea.
-- Comandos que no se guardan: `Set-PSReadLineOption -AddToHistoryHandler` que devuelve `SkipAdding` si el comando empieza con espacio o coincide con un patrón.
-- Escritura inmediata: `-HistorySaveStyle SaveIncrementally` (valor por defecto).
+### PowerShell (5.1 y 7)
+- Se envuelve la función `prompt`, conservando la anterior.
+- Al cambiar `$PWD`: `HistorySaveStyle SaveNothing`, `HistorySavePath <archivo>`, `ClearHistory()`, cargar con `AddToHistory()` uniendo los comandos multilínea (líneas que terminan en `` ` ``), y restaurar el estilo de guardado. En el primer prompt solo se cambia la ruta, porque PSReadLine aún no cargó nada (hallazgos del prototipo, §10).
+- Sensibles: `AddToHistoryHandler` devuelve `SkipAdding` si el comando empieza con espacio o coincide con `ignore`.
 
-## 6. Comandos de la CLI (MVP)
-| Comando | Qué hace |
-|---|---|
-| `crumb init <shell>` | Imprime el script de integración. |
-| `crumb resolve` | Uso interno del script. Devuelve la ruta del historial. |
-| `crumb mode [global\|folder\|project]` | Ve o cambia la elección de la carpeta actual. |
-| `crumb status` | Muestra modo, raíz de proyecto y archivo en uso. |
+### Fallos y desactivación (D5, D6)
+- Si `crumb` no está en el PATH o `resolve` falla: se mantiene el historial actual, se muestra **un** aviso por sesión y el prompt sigue. Nunca se bloquea ni se lanza una excepción en el prompt.
+- `CRUMB_DISABLE=1` antes de cargar: el script no se instala.
+- `crumb off`: vuelve al global y deja de resolver en esta sesión. `crumb on` lo reactiva.
+
+## 6. Comandos
+Mensajes en inglés (E2).
+
+| Comando | Dónde se ejecuta | Qué hace |
+|---|---|---|
+| `crumb init <shell>` | binario | Imprime el script de integración con la configuración incluida. |
+| `crumb resolve` | binario (interno) | Sección 4. |
+| `crumb mode [global\|folder\|project] [--path <dir>]` | función + binario | Sin argumento muestra el modo; con argumento lo guarda y la función recarga el historial. |
+| `crumb status` | binario | Modo, raíz de proyecto, archivo en uso y rutas de datos. |
+| `crumb off` / `crumb on` | función | Desactiva o reactiva crumb en la sesión. |
+| `crumb move <vieja> <nueva>` | binario | Reasigna elecciones e historiales tras mover un proyecto (E1). |
+| `crumb setup <shell> [--remove]` | binario | Añade o quita la línea del perfil. Pide confirmación y hace respaldo del perfil. |
+| `crumb purge` | binario | Borra elecciones e historiales de crumb. Pide confirmación. No toca los historiales globales del shell. |
+| `crumb version` | binario | Versión. |
 
 ## 7. Estructura del proyecto Go
 ```
-crumb/
-├── cmd/crumb/main.go
-├── internal/
-│   ├── cli/        # comandos (cobra)
-│   ├── config/     # config.toml y rutas por sistema operativo
-│   ├── project/    # detección de raíz de proyecto
-│   ├── choice/     # choices.json
-│   ├── resolve/    # lógica de la sección 4
-│   ├── prompt/     # pregunta interactiva
-│   └── shell/      # scripts embebidos (pwsh.ps1, bash.sh)
-├── .goreleaser.yaml
-└── LICENSE (MIT)
+cmd/crumb/main.go
+internal/
+  cli/       subcomandos (paquete flag de la librería estándar)
+  paths/     rutas por sistema operativo y CRUMB_HOME
+  project/   detección de raíz, normalización, nombre de archivo
+  config/    config.toml y .crumb
+  choices/   choices.json con escritura atómica y bloqueo
+  resolve/   sección 4
+  shell/     scripts embebidos (pwsh.ps1, bash.sh) y generación de init
+prototype/   prototipo y pruebas e2e (se reutilizan con el binario)
 ```
-Dependencias previstas: `cobra` (CLI) y una librería TOML. La pregunta usa lectura simple de entrada, sin interfaz completa.
+- Go 1.27 (versión estable actual).
+- Dependencias: solo `github.com/BurntSushi/toml`. La CLI usa `flag` de la librería estándar: son pocos subcomandos y no hace falta `cobra`.
 
-## 8. Riesgos a validar primero
-1. **PowerShell recarga el historial en caliente**: `ClearHistory` y `AddToHistory` dependen de la versión de PSReadLine (Windows PowerShell 5.1 trae una antigua). Probar en pwsh 7 y en 5.1.
-2. **Latencia**: arranque de `crumb` en Windows, donde el antivirus puede sumar tiempo. Medir.
-3. **Pregunta dentro del prompt**: confirmar que se lee bien el teclado desde la función `prompt` y en la terminal integrada de VS Code.
-4. **Marcadores demasiado agresivos**: un `package.json` en cada subpaquete de un monorepo daría muchos historiales. Revisar con proyectos reales.
+## 8. Estrategia de pruebas
+- **Unitarias** (`go test`): tablas de casos con `t.TempDir()`. Corren en Windows, Linux y macOS en CI.
+- **e2e**: las de `prototype/e2e` (tui-test y VS Code) apuntando al binario en lugar del prototipo. Mismo escenario, mismas aserciones.
+- **Rendimiento**: `crumb resolve` debe tardar menos de 50 ms en Windows (medido en CI y en local).
+- **Definición de terminado de cada tarea** (E7): pruebas unitarias en verde en las 3 plataformas, escenario e2e en verde con el binario cuando la tarea lo afecta, y documentación actualizada.
 
-## 9. Orden de trabajo propuesto
-1. **Prototipo solo en script** (sin Go): cambiar de historial al hacer `cd` en PowerShell y en bash. Valida los riesgos 1 y 3.
-2. `resolve` en Go con detección de proyecto y pruebas unitarias.
-3. Pregunta inicial y `choices.json`.
-4. `init` con los scripts embebidos y comandos `mode` y `status`.
-5. Ocultar comandos sensibles.
-6. Empaquetado con GoReleaser.
+## 9. Riesgos
+| # | Riesgo | Estado |
+|---|---|---|
+| 1 | PowerShell recarga el historial en caliente | Validado en 5.1 y 7 (§10). |
+| 2 | Latencia de arranque de `crumb` en Windows (antivirus) | Pendiente: se mide en T4. |
+| 3 | Pregunta dentro del prompt y en VS Code | Validado en las 3 shells y en VS Code (§10). |
+| 4 | Marcadores demasiado agresivos en monorepos | Resuelto con D2 (`.crumb scope = "root"`). |
+| 5 | Rutas con espacios, comillas o mayúsculas distintas | Cubierto por la normalización y pruebas en T2. |
+| 6 | bash: cuelgue intermitente en las e2e con tui-test | 2 de 6 al inicio, sin causa. Vigilar en CI. |
 
 ## 10. Resultados del prototipo (`prototype/`)
 Probado en Windows PowerShell 5.1 con PSReadLine 2.0.0 y en bash de Git for Windows. Sin probar: PowerShell 7, Linux, macOS, la pregunta inicial con teclado real y la terminal de VS Code.
@@ -113,7 +181,7 @@ Probado en Windows PowerShell 5.1 con PSReadLine 2.0.0 y en bash de Git for Wind
 - **Detalle de comportamiento**: el `cd` que cambia de carpeta se guarda en el historial anterior, porque el cambio ocurre en el prompt siguiente. Es el mismo comportamiento de `zsh-per-directory-history`.
 - **Pendiente**: riesgos 2 (latencia, necesita el binario Go), 3 (pregunta con teclado real) y 4 (marcadores en monorepos).
 
-### Pruebas con tui-test (`prototype/e2e/pilot.ps1`)
+### Prueba piloto con tui-test (reemplazada por `prototype/e2e/run-e2e.ps1`)
 [microsoft/tui-test](https://github.com/microsoft/tui-test) 0.1.1 abre un PowerShell real y envía teclas. La prueba piloto pasó 3 de 3 veces en Windows PowerShell 5.1. Cubre: la pregunta con teclado real (2 opciones sin proyecto, 3 con proyecto), que no repregunte en una subcarpeta, que la flecha arriba traiga el historial correcto, que otra carpeta tenga historial propio y que al volver se recupere.
 
 Hallazgos:

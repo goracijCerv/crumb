@@ -1,4 +1,4 @@
-﻿# Definición del producto (v1.0)
+﻿# Definición del producto (v1.1)
 
 Nombre: **crumb**
 
@@ -23,7 +23,7 @@ Desarrolladores que trabajan con varios proyectos en paralelo. Equipos que quier
 2. **Detección de proyecto**: una carpeta es raíz de proyecto si tiene un marcador (archivo propio de la herramienta, `.git`, `package.json`, `*.csproj`, etc.; lista configurable).
 3. **Subcarpetas**: si una subcarpeta es raíz de otro proyecto (por ejemplo un monorepo con varias apps), tiene su propio historial. Si no, usa el del proyecto padre.
 4. **Cambio con `cd`**: el historial activo cambia solo al cruzar el límite de un proyecto. Moverse entre subcarpetas del mismo proyecto no lo cambia.
-5. **Búsqueda**: Ctrl+R y flechas respetan el modo activo. Se puede ampliar la búsqueda al global.
+5. **Búsqueda**: Ctrl+R y flechas respetan el modo activo. Ampliar la búsqueda al global queda para la segunda versión.
 
 ## 6. Compartir historial
 Objetivo: que alguien nuevo sepa cómo correr el proyecto.
@@ -44,7 +44,7 @@ Objetivo: que alguien nuevo sepa cómo correr el proyecto.
 ## 9. Alcance del MVP
 Dentro:
 - Modos global, carpeta y proyecto (guardados fuera del repo).
-- Pregunta la primera vez en cada carpeta, con la elección recordada.
+- Pregunta la primera vez en cada proyecto, con la elección recordada. Fuera de un proyecto, global sin preguntar.
 - Detección de proyecto y cambio de historial con `cd`.
 - Flechas y Ctrl+R usan el historial activo.
 - Forma de no guardar un comando (secretos).
@@ -58,17 +58,20 @@ Segunda versión:
 - Soporte de cmd.
 - Terminal propia con interfaz gráfica.
 - Sincronización en la nube y estadísticas.
+
 ## 10. Decisiones técnicas
 - Lenguaje: **Go**. Un binario único por plataforma, más scripts de integración por shell.
 - Distribución: compilación cruzada y publicación con GoReleaser.
 
 ## 11. Decisiones de comportamiento
-- **Importar historial global**: opcional. En la pregunta inicial se ofrece empezar vacío o importar los últimos N comandos del global.
+- **Importar historial global**: segunda versión. Será opcional: en la pregunta inicial se ofrecerá empezar vacío o importar los últimos N comandos del global.
 - **Varias terminales en el mismo proyecto**: cada comando se escribe al archivo al ejecutarse, sin esperar a cerrar la terminal, así las sesiones se ven entre sí.
+- **Distinta shell en el mismo proyecto**: PowerShell y bash tienen historiales separados en el MVP, porque guardan formatos distintos. Unificarlos llega con el formato propio de la segunda versión.
+- **Mover o renombrar un proyecto**: el historial está ligado a la ruta. `crumb move <vieja> <nueva>` lo reasigna.
+- **Idioma**: mensajes del programa y documentación pública en inglés; README también en español. Los documentos de diseño siguen en español.
+- **Privacidad**: sin telemetría. crumb no se conecta a internet.
 - **Licencia**: MIT.
-- **Instalación**: scoop, winget y brew, publicados con GoReleaser.
+- **Instalación**: scoop, winget y brew, publicados con GoReleaser. `crumb setup` añade la línea al perfil del shell; `crumb setup --remove` la quita y `crumb purge` borra los datos.
 
 ## 12. Pendiente
-- Ninguno. Siguiente paso: diseño técnico.
-
-
+- Ninguno.
